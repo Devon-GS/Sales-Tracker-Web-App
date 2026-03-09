@@ -123,20 +123,15 @@ def upload_csv():
         return jsonify({'error': 'File must be CSV format'}), 400
     
     try:
-        # Read CSV file
-        df = pd.read_csv(file)
+        # Read CSV - skip first 2 rows (metadata/header rows)
+        df = pd.read_csv(file, skiprows=2, header=None)
         
-        # Extract required columns (1-indexed in the request, 0-indexed in pandas)
-        # Column 1: Category, Column 2: Description, Column 3: Code, Column 7: Quantity
-        required_cols = [0, 1, 2, 6]  # 0-indexed
+        print(f"[v0] CSV loaded with {len(df)} rows")
+        print(f"[v0] Column count: {len(df.columns)}")
         
+        # Column 1: Category, Column 2: Description, Column 3: Code, Column 4: Date, Column 7: Quantity
         if len(df.columns) < 7:
             return jsonify({'error': 'CSV must have at least 7 columns'}), 400
-        
-        category_col = df.iloc[:, 0]
-        description_col = df.iloc[:, 1]
-        code_col = df.iloc[:, 2]
-        quantity_col = df.iloc[:, 6]
         
         # Get all categories
         categories = {cat['name']: cat['id'] for cat in DatabaseModels.get_all_categories()}
@@ -148,48 +143,93 @@ def upload_csv():
             'error_details': []
         }
         
-        # Process each row
-        for idx, row in enumerate(df.iterrows()):
+        # First pass: extract and aggregate data by category, code, and date
+        aggregated_data = {}  # key: (category_name, code, date_str) -> total_quantity
+        date_errors = []
+        
+        for idx, (_, row) in enumerate(df.iterrows()):
+            row_number = idx + 4
+            
+            # Skip if entire row is NaN
+            if row.isna().all():
+                continue
+            
             try:
-                category_name = str(row[1][0]).strip()
-                description = str(row[1][1]).strip()
-                code = str(row[1][2]).strip()
-                quantity = int(row[1][6])
+                # Extract columns
+                category_name = str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else ""
+                description = str(row.iloc[1]).strip() if pd.notna(row.iloc[1]) else ""
+                code = str(row.iloc[2]).strip() if pd.notna(row.iloc[2]) else ""
+                date_str = str(row.iloc[3]).strip() if pd.notna(row.iloc[3]) else ""
                 
-                # Validate data
+                # Parse quantity
+                try:
+                    quantity = int(float(row.iloc[6]))
+                except (ValueError, TypeError):
+                    summary['errors'] += 1
+                    summary['error_details'].append(f"Row {row_number}: Invalid quantity value '{row.iloc[6]}'")
+                    continue
+                
+                # Validate required fields
                 if not category_name or not code:
                     summary['errors'] += 1
-                    summary['error_details'].append(f"Row {idx + 2}: Missing category or code")
+                    summary['error_details'].append(f"Row {row_number}: Missing category or code")
                     continue
                 
-                # Check if category exists
-                if category_name not in categories:
+                # Parse date
+                try:
+                    sale_date = pd.to_datetime(date_str).date()
+                except:
                     summary['errors'] += 1
-                    summary['error_details'].append(f"Row {idx + 2}: Category '{category_name}' not found")
+                    summary['error_details'].append(f"Row {row_number}: Invalid date format '{date_str}'")
                     continue
+                
+                # Aggregate by (category, code, date)
+                key = (category_name, code, str(sale_date))
+                if key in aggregated_data:
+                    aggregated_data[key] += quantity
+                else:
+                    aggregated_data[key] = quantity
+                    
+            except Exception as e:
+                summary['errors'] += 1
+                summary['error_details'].append(f"Row {row_number}: {str(e)}")
+        
+        # Second pass: insert aggregated data, checking for duplicates
+        for (category_name, code, date_str), total_quantity in aggregated_data.items():
+            try:
+                sale_date = pd.to_datetime(date_str).date()
+                
+                # Auto-create category if needed
+                if category_name not in categories:
+                    result = DatabaseModels.add_category(category_name)
+                    if result['success']:
+                        categories[category_name] = result['id']
+                    else:
+                        summary['errors'] += 1
+                        summary['error_details'].append(f"Failed to create category '{category_name}'")
+                        continue
                 
                 category_id = categories[category_name]
                 
-                # Use current date if not specified
-                sale_date = datetime.now().date()
-                
                 # Add record to database
-                result = DatabaseModels.add_sales_record(category_id, description, code, quantity, sale_date)
+                result = DatabaseModels.add_sales_record(category_id, code, code, total_quantity, sale_date)
                 
                 if result['success']:
-                    if result['action'] == 'added':
-                        summary['added'] += 1
+                    summary['added'] += 1
                 elif result['action'] == 'duplicate':
                     summary['duplicates'] += 1
                 else:
                     summary['errors'] += 1
-                    summary['error_details'].append(f"Row {idx + 2}: {result.get('error', 'Unknown error')}")
+                    summary['error_details'].append(f"Failed to add: {category_name} - {code} ({date_str}): {result.get('error', 'Unknown error')}")
             
             except Exception as e:
                 summary['errors'] += 1
-                summary['error_details'].append(f"Row {idx + 2}: {str(e)}")
+                summary['error_details'].append(f"Error processing {category_name} - {code}: {str(e)}")
         
         return jsonify(summary)
+    
+    except Exception as e:
+        return jsonify({'error': f'Error processing CSV: {str(e)}'}), 400
     
     except Exception as e:
         return jsonify({'error': f'Error processing CSV: {str(e)}'}), 400
