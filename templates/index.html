@@ -1,0 +1,255 @@
+{% extends "base.html" %}
+
+{% block title %}Monthly View - Sales Tracker{% endblock %}
+
+{% block extra_css %}
+<style>
+    .filters {
+        background: #f8f9fa;
+        padding: 1.5rem;
+        border-radius: 8px;
+        margin-bottom: 2rem;
+    }
+    .data-table {
+        max-height: 500px;
+        overflow-y: auto;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-md-8">
+        <h1>Monthly Sales View</h1>
+    </div>
+</div>
+
+<div class="filters">
+    <div class="row g-3">
+        <div class="col-md-3">
+            <label class="form-label">Year</label>
+            <input type="number" id="yearSelect" class="form-control" value="{{ current_year }}" min="2020" max="2099">
+        </div>
+        <div class="col-md-3">
+            <label class="form-label">Month</label>
+            <select id="monthSelect" class="form-select">
+                <option value="1" {% if current_month == 1 %}selected{% endif %}>January</option>
+                <option value="2" {% if current_month == 2 %}selected{% endif %}>February</option>
+                <option value="3" {% if current_month == 3 %}selected{% endif %}>March</option>
+                <option value="4" {% if current_month == 4 %}selected{% endif %}>April</option>
+                <option value="5" {% if current_month == 5 %}selected{% endif %}>May</option>
+                <option value="6" {% if current_month == 6 %}selected{% endif %}>June</option>
+                <option value="7" {% if current_month == 7 %}selected{% endif %}>July</option>
+                <option value="8" {% if current_month == 8 %}selected{% endif %}>August</option>
+                <option value="9" {% if current_month == 9 %}selected{% endif %}>September</option>
+                <option value="10" {% if current_month == 10 %}selected{% endif %}>October</option>
+                <option value="11" {% if current_month == 11 %}selected{% endif %}>November</option>
+                <option value="12" {% if current_month == 12 %}selected{% endif %}>December</option>
+            </select>
+        </div>
+        <div class="col-md-3">
+            <label class="form-label">Category</label>
+            <select id="categorySelect" class="form-select">
+                <option value="">All Categories</option>
+                {% for category in categories %}
+                <option value="{{ category.id }}">{{ category.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-md-3">
+            <label class="form-label">&nbsp;</label>
+            <button class="btn btn-primary w-100" onclick="loadMonthlyData()">
+                <i class="bi bi-search"></i> Load Data
+            </button>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-lg-8">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">Sales Chart</h5>
+            </div>
+            <div class="card-body">
+                <canvas id="monthlyChart"></canvas>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-4">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">Summary</h5>
+            </div>
+            <div class="card-body">
+                <div id="summary">
+                    <p class="text-muted">No data loaded</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mt-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">Sales Details</h5>
+            </div>
+            <div class="card-body">
+                <div class="data-table">
+                    <table class="table table-hover mb-0" id="salesTable">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Category</th>
+                                <th>Stock Code</th>
+                                <th>Description</th>
+                                <th>Quantity</th>
+                                <th>Date</th>
+                            </tr>
+                        </thead>
+                        <tbody id="salesTableBody">
+                            <tr>
+                                <td colspan="5" class="text-center text-muted">No data loaded</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    let monthlyChart = null;
+
+    function loadMonthlyData() {
+        const year = parseInt(document.getElementById('yearSelect').value);
+        const month = parseInt(document.getElementById('monthSelect').value);
+        const categoryId = document.getElementById('categorySelect').value || null;
+
+        const params = new URLSearchParams();
+        params.append('year', year);
+        params.append('month', month);
+        if (categoryId) params.append('category_id', categoryId);
+
+        fetch(`/api/sales/month?${params}`)
+            .then(response => response.json())
+            .then(data => {
+                updateTable(data);
+                updateChart(data);
+                updateSummary(data);
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('Error loading data');
+            });
+    }
+
+    function updateTable(data) {
+        const tbody = document.getElementById('salesTableBody');
+        if (data.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted">No sales data for this period</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = data.map(row => `
+            <tr>
+                <td>${row.category}</td>
+                <td><strong>${row.stock_code}</strong></td>
+                <td>${row.stock_description}</td>
+                <td><span class="badge bg-primary">${row.quantity}</span></td>
+                <td>${row.sale_date}</td>
+            </tr>
+        `).join('');
+    }
+
+    function updateChart(data) {
+        // Group data by stock code
+        const groupedData = {};
+        data.forEach(row => {
+            if (!groupedData[row.stock_code]) {
+                groupedData[row.stock_code] = {
+                    description: row.stock_description,
+                    quantity: 0
+                };
+            }
+            groupedData[row.stock_code].quantity += row.quantity;
+        });
+
+        const labels = Object.keys(groupedData);
+        const quantities = labels.map(code => groupedData[code].quantity);
+
+        const ctx = document.getElementById('monthlyChart').getContext('2d');
+        
+        if (monthlyChart) {
+            monthlyChart.destroy();
+        }
+
+        monthlyChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Quantity Sold',
+                    data: quantities,
+                    backgroundColor: 'rgba(75, 192, 192, 0.7)',
+                    borderColor: 'rgba(75, 192, 192, 1)',
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: {
+                        display: true,
+                        position: 'top'
+                    }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        title: {
+                            display: true,
+                            text: 'Quantity'
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    function updateSummary(data) {
+        const summary = document.getElementById('summary');
+        
+        let totalQuantity = 0;
+        let uniqueItems = new Set();
+        
+        data.forEach(row => {
+            totalQuantity += row.quantity;
+            uniqueItems.add(row.stock_code);
+        });
+
+        summary.innerHTML = `
+            <div class="row">
+                <div class="col-6">
+                    <div class="text-muted small">Total Quantity</div>
+                    <div class="h4 mb-3">${totalQuantity}</div>
+                </div>
+                <div class="col-6">
+                    <div class="text-muted small">Unique Items</div>
+                    <div class="h4 mb-3">${uniqueItems.size}</div>
+                </div>
+            </div>
+        `;
+    }
+
+    // Load data on page load
+    document.addEventListener('DOMContentLoaded', function() {
+        loadMonthlyData();
+    });
+</script>
+{% endblock %}

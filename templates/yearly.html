@@ -1,0 +1,210 @@
+{% extends "base.html" %}
+
+{% block title %}Yearly View - Sales Tracker{% endblock %}
+
+{% block extra_css %}
+<style>
+    .filters {
+        background: #f8f9fa;
+        padding: 1.5rem;
+        border-radius: 8px;
+        margin-bottom: 2rem;
+    }
+    .items-list {
+        max-height: 600px;
+        overflow-y: auto;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-md-8">
+        <h1>Yearly Sales View</h1>
+    </div>
+</div>
+
+<div class="filters">
+    <div class="row g-3">
+        <div class="col-md-4">
+            <label class="form-label">Year</label>
+            <input type="number" id="yearSelect" class="form-control" value="{{ current_year }}" min="2020" max="2099">
+        </div>
+        <div class="col-md-4">
+            <label class="form-label">Category</label>
+            <select id="categorySelect" class="form-select">
+                <option value="">All Categories</option>
+                {% for category in categories %}
+                <option value="{{ category.id }}">{{ category.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-md-4">
+            <label class="form-label">&nbsp;</label>
+            <button class="btn btn-primary w-100" onclick="loadYearlyData()">
+                <i class="bi bi-search"></i> Load Items
+            </button>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-lg-9">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">Yearly Sales Chart</h5>
+            </div>
+            <div class="card-body">
+                <canvas id="yearlyChart"></canvas>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-3">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">Items</h5>
+            </div>
+            <div class="card-body">
+                <div class="items-list">
+                    <div id="itemsList" class="list-group">
+                        <div class="text-muted small p-2">No items found</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    let yearlyChart = null;
+    let currentItems = [];
+
+    function loadYearlyData() {
+        const year = parseInt(document.getElementById('yearSelect').value);
+        const categoryId = document.getElementById('categorySelect').value || null;
+
+        const params = new URLSearchParams();
+        params.append('year', year);
+        if (categoryId) params.append('category_id', categoryId);
+
+        fetch(`/api/items/year?${params}`)
+            .then(response => response.json())
+            .then(data => {
+                currentItems = data;
+                displayItemsList(data);
+                if (data.length > 0) {
+                    loadItemChart(data[0].stock_code, data[0].stock_description);
+                } else {
+                    clearChart();
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('Error loading items');
+            });
+    }
+
+    function displayItemsList(items) {
+        const itemsList = document.getElementById('itemsList');
+        
+        if (items.length === 0) {
+            itemsList.innerHTML = '<div class="text-muted small p-2">No items found</div>';
+            return;
+        }
+
+        itemsList.innerHTML = items.map((item, idx) => `
+            <button type="button" class="list-group-item list-group-item-action ${idx === 0 ? 'active' : ''}" 
+                    onclick="selectItem('${item.stock_code}', '${item.stock_description}')">
+                <div class="small text-muted">${item.stock_code}</div>
+                <div class="truncate">${item.stock_description}</div>
+            </button>
+        `).join('');
+    }
+
+    function selectItem(stockCode, description) {
+        // Update active button
+        document.querySelectorAll('#itemsList .list-group-item').forEach(btn => {
+            btn.classList.remove('active');
+        });
+        event.target.closest('.list-group-item').classList.add('active');
+
+        loadItemChart(stockCode, description);
+    }
+
+    function loadItemChart(stockCode, description) {
+        const year = parseInt(document.getElementById('yearSelect').value);
+
+        fetch(`/api/sales/yearly-item?year=${year}&stock_code=${encodeURIComponent(stockCode)}`)
+            .then(response => response.json())
+            .then(data => {
+                updateYearlyChart(data.data, stockCode, description);
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('Error loading chart');
+            });
+    }
+
+    function updateYearlyChart(monthlyData, stockCode, description) {
+        const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        
+        const ctx = document.getElementById('yearlyChart').getContext('2d');
+        
+        if (yearlyChart) {
+            yearlyChart.destroy();
+        }
+
+        yearlyChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: months,
+                datasets: [{
+                    label: `${stockCode} - ${description}`,
+                    data: monthlyData,
+                    borderColor: 'rgba(75, 192, 192, 1)',
+                    backgroundColor: 'rgba(75, 192, 192, 0.1)',
+                    borderWidth: 2,
+                    fill: true,
+                    tension: 0.4,
+                    pointRadius: 5,
+                    pointBackgroundColor: 'rgba(75, 192, 192, 1)',
+                    pointBorderColor: '#fff',
+                    pointBorderWidth: 2
+                }]
+            },
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: {
+                        display: true,
+                        position: 'top'
+                    }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        title: {
+                            display: true,
+                            text: 'Quantity'
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    function clearChart() {
+        if (yearlyChart) {
+            yearlyChart.destroy();
+        }
+    }
+
+    // Load data on page load
+    document.addEventListener('DOMContentLoaded', function() {
+        loadYearlyData();
+    });
+</script>
+{% endblock %}
