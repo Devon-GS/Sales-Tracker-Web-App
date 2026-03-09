@@ -38,6 +38,34 @@
         max-height: 400px;
         overflow-y: auto;
     }
+    .terminal {
+        background: #1e1e1e;
+        color: #00ff00;
+        padding: 1rem;
+        border-radius: 6px;
+        font-family: 'Courier New', monospace;
+        font-size: 0.85rem;
+        line-height: 1.4;
+        max-height: 300px;
+        overflow-y: auto;
+        border: 1px solid #444;
+        display: none;
+    }
+    .terminal.active {
+        display: block;
+    }
+    .terminal-line {
+        margin: 0;
+    }
+    .terminal-line.info {
+        color: #00ff00;
+    }
+    .terminal-line.error {
+        color: #ff4444;
+    }
+    .terminal-line.success {
+        color: #44ff44;
+    }
 </style>
 {% endblock %}
 
@@ -61,6 +89,11 @@
     <input type="file" id="csvFile" class="d-none" accept=".csv" onchange="handleFileSelect(event)">
     
     <div id="uploadStatus" class="mt-3" style="display: none;"></div>
+    
+    <!-- Terminal Output -->
+    <div id="terminal" class="terminal mt-3">
+        <div id="terminalContent"></div>
+    </div>
     
     <div class="mt-4">
         <h5>CSV Format Requirements</h5>
@@ -132,8 +165,19 @@
         const formData = new FormData();
         formData.append('file', file);
 
-        showUploadStatus('loading', 'Uploading and processing...');
+        // Show terminal and clear it
+        const terminal = document.getElementById('terminal');
+        const terminalContent = document.getElementById('terminalContent');
+        terminal.classList.add('active');
+        terminalContent.innerHTML = '';
 
+        showUploadStatus('loading', 'Uploading and processing...');
+        addTerminalLog('Starting upload...', 'info');
+
+        // Start listening for logs via SSE
+        connectToLogStream();
+
+        // Upload the file
         fetch('/api/upload-csv', {
             method: 'POST',
             body: formData
@@ -142,31 +186,56 @@
         .then(data => {
             if (data.error) {
                 showUploadStatus('error', data.error);
+                addTerminalLog(`Error: ${data.error}`, 'error');
             } else {
-                let message = `<strong>Upload Complete!</strong><br>`;
-                message += `Added: ${data.added} records<br>`;
-                message += `Duplicates skipped: ${data.duplicates}<br>`;
-                message += `Errors: ${data.errors}`;
-                
-                if (data.error_details.length > 0) {
-                    message += '<br><br><strong>Errors:</strong><ul>';
-                    data.error_details.slice(0, 5).forEach(err => {
-                        message += `<li>${err}</li>`;
-                    });
-                    if (data.error_details.length > 5) {
-                        message += `<li>... and ${data.error_details.length - 5} more</li>`;
-                    }
-                    message += '</ul>';
-                }
-                
-                showUploadStatus('success', message);
-                csvFile.value = '';
-                refreshCategories();
+                addTerminalLog('Upload request sent successfully', 'success');
             }
+            csvFile.value = '';
         })
         .catch(error => {
             showUploadStatus('error', `Error: ${error.message}`);
+            addTerminalLog(`Error: ${error.message}`, 'error');
         });
+    }
+
+    function connectToLogStream() {
+        const eventSource = new EventSource('/api/logs');
+
+        eventSource.onmessage = function(event) {
+            const message = event.data;
+
+            if (message === '__UPLOAD_COMPLETE__') {
+                addTerminalLog('Upload process completed', 'success');
+                eventSource.close();
+                refreshCategories();
+                
+                // Show completion status after a short delay
+                setTimeout(() => {
+                    showUploadStatus('success', '<strong>Upload Complete!</strong><br>Check terminal for details.');
+                }, 500);
+            } else {
+                const type = message.includes('✗') ? 'error' : 
+                            message.includes('✓') ? 'success' : 
+                            message.includes('⊘') ? 'info' : 'info';
+                addTerminalLog(message, type);
+            }
+        };
+
+        eventSource.onerror = function(error) {
+            console.error('Log stream error:', error);
+            eventSource.close();
+        };
+    }
+
+    function addTerminalLog(message, type = 'info') {
+        const terminalContent = document.getElementById('terminalContent');
+        const line = document.createElement('div');
+        line.className = `terminal-line ${type}`;
+        line.textContent = message;
+        terminalContent.appendChild(line);
+        
+        // Auto-scroll to bottom
+        terminalContent.parentElement.scrollTop = terminalContent.parentElement.scrollHeight;
     }
 
     function showUploadStatus(type, message) {

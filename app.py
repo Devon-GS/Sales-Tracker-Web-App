@@ -4,6 +4,11 @@ from models import DatabaseModels
 import pandas as pd
 from datetime import datetime
 import os
+import io
+import sys
+import threading
+import queue
+import time
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = 'uploads'
@@ -12,8 +17,40 @@ app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 # Create upload folder if it doesn't exist
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
+# Global queue for streaming logs
+log_queue = queue.Queue()
+upload_complete = False
+
 # Initialize database
 init_db()
+
+def add_log(message):
+    """Add a log message to the queue for real-time streaming."""
+    log_queue.put(message)
+    print(message)
+
+@app.route('/api/logs')
+def stream_logs():
+    """Stream logs in real-time using SSE."""
+    def generate():
+        last_sent = False
+        timeout = 0
+        while timeout < 60:  # 60 second timeout
+            try:
+                msg = log_queue.get(timeout=1)
+                yield f"data: {msg}\n\n"
+                timeout = 0
+            except queue.Empty:
+                if upload_complete and not last_sent:
+                    yield f"data: __UPLOAD_COMPLETE__\n\n"
+                    last_sent = True
+                timeout += 1
+    
+    return generate(), 200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'X-Accel-Buffering': 'no'
+    }
 
 @app.route('/')
 def index():
@@ -111,7 +148,9 @@ def delete_category(category_id):
 
 @app.route('/api/upload-csv', methods=['POST'])
 def upload_csv():
-    """Handle CSV upload and process sales data."""
+    """Handle CSV upload and process sales data asynchronously."""
+    global upload_complete
+    
     if 'file' not in request.files:
         return jsonify({'error': 'No file provided'}), 400
     
@@ -122,16 +161,46 @@ def upload_csv():
     if not file.filename.endswith('.csv'):
         return jsonify({'error': 'File must be CSV format'}), 400
     
+    # Read file content into memory before passing to thread
+    # This prevents "I/O operation on closed file" error
+    file_content = file.read()
+    
+    # Clear queue and reset flag
+    while not log_queue.empty():
+        try:
+            log_queue.get_nowait()
+        except queue.Empty:
+            break
+    upload_complete = False
+    
+    # Start processing in a separate thread with file content
+    thread = threading.Thread(target=process_csv_file, args=(file_content,))
+    thread.daemon = True
+    thread.start()
+    
+    return jsonify({'message': 'Upload started, check /api/logs for progress'}), 202
+
+def process_csv_file(file_content):
+    """Process CSV file asynchronously."""
+    global upload_complete
+    
     try:
-        # Read CSV - skip first 2 rows (metadata/header rows)
-        df = pd.read_csv(file, skiprows=2, header=None)
+        add_log("Starting CSV upload...")
         
-        print(f"[v0] CSV loaded with {len(df)} rows")
-        print(f"[v0] Column count: {len(df.columns)}")
+        # Create BytesIO object from file content
+        file_obj = io.BytesIO(file_content)
+        
+        # Read CSV - skip first 2 rows (metadata/header rows)
+        df = pd.read_csv(file_obj, skiprows=2, header=None)
+        
+        add_log(f"CSV loaded with {len(df)} rows")
+        add_log(f"Column count: {len(df.columns)}")
         
         # Column 1: Category, Column 2: Description, Column 3: Code, Column 4: Date, Column 7: Quantity
         if len(df.columns) < 7:
-            return jsonify({'error': 'CSV must have at least 7 columns'}), 400
+            add_log("Error: CSV must have at least 7 columns")
+            upload_complete = True
+            return
         
         # Get all categories
         categories = {cat['name']: cat['id'] for cat in DatabaseModels.get_all_categories()}
@@ -145,7 +214,7 @@ def upload_csv():
         
         # First pass: extract and aggregate data by category, code, and date
         aggregated_data = {}  # key: (category_name, code, date_str) -> total_quantity
-        date_errors = []
+        add_log("Parsing and aggregating data...")
         
         for idx, (_, row) in enumerate(df.iterrows()):
             row_number = idx + 4
@@ -167,12 +236,14 @@ def upload_csv():
                 except (ValueError, TypeError):
                     summary['errors'] += 1
                     summary['error_details'].append(f"Row {row_number}: Invalid quantity value '{row.iloc[6]}'")
+                    add_log(f"Row {row_number}: Invalid quantity")
                     continue
                 
                 # Validate required fields
                 if not category_name or not code:
                     summary['errors'] += 1
                     summary['error_details'].append(f"Row {row_number}: Missing category or code")
+                    add_log(f"Row {row_number}: Missing category or code")
                     continue
                 
                 # Parse date
@@ -181,6 +252,7 @@ def upload_csv():
                 except:
                     summary['errors'] += 1
                     summary['error_details'].append(f"Row {row_number}: Invalid date format '{date_str}'")
+                    add_log(f"Row {row_number}: Invalid date format")
                     continue
                 
                 # Aggregate by (category, code, date)
@@ -193,20 +265,26 @@ def upload_csv():
             except Exception as e:
                 summary['errors'] += 1
                 summary['error_details'].append(f"Row {row_number}: {str(e)}")
+                add_log(f"Row {row_number}: Error - {str(e)}")
+        
+        add_log(f"Aggregated {len(aggregated_data)} unique daily sales records")
+        add_log("Inserting data into database...")
         
         # Second pass: insert aggregated data, checking for duplicates
-        for (category_name, code, date_str), total_quantity in aggregated_data.items():
+        for idx, ((category_name, code, date_str), total_quantity) in enumerate(aggregated_data.items()):
             try:
                 sale_date = pd.to_datetime(date_str).date()
                 
                 # Auto-create category if needed
                 if category_name not in categories:
+                    add_log(f"Creating new category: '{category_name}'")
                     result = DatabaseModels.add_category(category_name)
                     if result['success']:
                         categories[category_name] = result['id']
                     else:
                         summary['errors'] += 1
                         summary['error_details'].append(f"Failed to create category '{category_name}'")
+                        add_log(f"Failed to create category '{category_name}'")
                         continue
                 
                 category_id = categories[category_name]
@@ -216,23 +294,31 @@ def upload_csv():
                 
                 if result['success']:
                     summary['added'] += 1
+                    add_log(f"✓ Added: {category_name} - {code} ({date_str}): {total_quantity} units")
                 elif result['action'] == 'duplicate':
                     summary['duplicates'] += 1
+                    add_log(f"⊘ Duplicate skipped: {category_name} - {code} ({date_str})")
                 else:
                     summary['errors'] += 1
                     summary['error_details'].append(f"Failed to add: {category_name} - {code} ({date_str}): {result.get('error', 'Unknown error')}")
+                    add_log(f"✗ Failed: {category_name} - {code}")
+                
+                # Send progress update every 10 records
+                if (idx + 1) % 10 == 0:
+                    add_log(f"Progress: Processed {idx + 1}/{len(aggregated_data)} records")
             
             except Exception as e:
                 summary['errors'] += 1
                 summary['error_details'].append(f"Error processing {category_name} - {code}: {str(e)}")
+                add_log(f"✗ Error: {category_name} - {code}: {str(e)}")
         
-        return jsonify(summary)
-    
+        add_log(f"Processing complete: {summary['added']} added, {summary['duplicates']} duplicates, {summary['errors']} errors")
+        
     except Exception as e:
-        return jsonify({'error': f'Error processing CSV: {str(e)}'}), 400
+        add_log(f"Error processing CSV: {str(e)}")
     
-    except Exception as e:
-        return jsonify({'error': f'Error processing CSV: {str(e)}'}), 400
+    finally:
+        upload_complete = True
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
