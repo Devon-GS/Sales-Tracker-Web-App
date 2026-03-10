@@ -213,7 +213,7 @@ def process_csv_file(file_content):
         }
         
         # First pass: extract and aggregate data by category, code, and date
-        aggregated_data = {}  # key: (category_name, code, date_str) -> total_quantity
+        aggregated_data = {}  # key: (category_name, code, date_str) -> {quantity, description}
         add_log("Parsing and aggregating data...")
         
         for idx, (_, row) in enumerate(df.iterrows()):
@@ -227,7 +227,16 @@ def process_csv_file(file_content):
                 # Extract columns
                 category_name = str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else ""
                 description = str(row.iloc[1]).strip() if pd.notna(row.iloc[1]) else ""
-                code = str(row.iloc[2]).strip() if pd.notna(row.iloc[2]) else ""
+                
+                # Parse stock code as integer
+                try:
+                    code = int(float(row.iloc[2]))
+                except (ValueError, TypeError):
+                    summary['errors'] += 1
+                    summary['error_details'].append(f"Row {row_number}: Invalid stock code '{row.iloc[2]}'")
+                    add_log(f"Row {row_number}: Invalid stock code")
+                    continue
+                
                 date_str = str(row.iloc[3]).strip() if pd.notna(row.iloc[3]) else ""
                 
                 # Parse quantity
@@ -240,27 +249,30 @@ def process_csv_file(file_content):
                     continue
                 
                 # Validate required fields
-                if not category_name or not code:
+                if not category_name or code is None:
                     summary['errors'] += 1
                     summary['error_details'].append(f"Row {row_number}: Missing category or code")
                     add_log(f"Row {row_number}: Missing category or code")
                     continue
                 
-                # Parse date
+                # Parse date - use DD/MM/YYYY format
                 try:
-                    sale_date = pd.to_datetime(date_str).date()
+                    sale_date = pd.to_datetime(date_str, format='%d/%m/%Y').date()
+                    # Debug log first 10 rows to see dates
+                    if idx < 10:
+                        add_log(f"Row {row_number}: date_str='{date_str}' -> parsed_date={sale_date}")
                 except:
                     summary['errors'] += 1
                     summary['error_details'].append(f"Row {row_number}: Invalid date format '{date_str}'")
-                    add_log(f"Row {row_number}: Invalid date format")
+                    add_log(f"Row {row_number}: Invalid date format '{date_str}'")
                     continue
                 
-                # Aggregate by (category, code, date)
+                # Aggregate by (category, code, date) - store both quantity and description
                 key = (category_name, code, str(sale_date))
                 if key in aggregated_data:
-                    aggregated_data[key] += quantity
+                    aggregated_data[key]['quantity'] += quantity
                 else:
-                    aggregated_data[key] = quantity
+                    aggregated_data[key] = {'quantity': quantity, 'description': description}
                     
             except Exception as e:
                 summary['errors'] += 1
@@ -271,9 +283,11 @@ def process_csv_file(file_content):
         add_log("Inserting data into database...")
         
         # Second pass: insert aggregated data, checking for duplicates
-        for idx, ((category_name, code, date_str), total_quantity) in enumerate(aggregated_data.items()):
+        for idx, ((category_name, code, date_str), data) in enumerate(aggregated_data.items()):
             try:
-                sale_date = pd.to_datetime(date_str).date()
+                sale_date = pd.to_datetime(date_str, format='%Y-%m-%d').date()
+                total_quantity = data['quantity']
+                description = data['description']
                 
                 # Auto-create category if needed
                 if category_name not in categories:
@@ -289,8 +303,8 @@ def process_csv_file(file_content):
                 
                 category_id = categories[category_name]
                 
-                # Add record to database
-                result = DatabaseModels.add_sales_record(category_id, code, code, total_quantity, sale_date)
+                # Add record to database with description
+                result = DatabaseModels.add_sales_record(category_id, description, code, total_quantity, sale_date)
                 
                 if result['success']:
                     summary['added'] += 1

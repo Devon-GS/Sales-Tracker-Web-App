@@ -72,7 +72,9 @@
                 <h5 class="card-title mb-0">Sales Chart</h5>
             </div>
             <div class="card-body">
-                <canvas id="monthlyChart"></canvas>
+                <div class="chart-container">
+                    <canvas id="monthlyChart"></canvas>
+                </div>
             </div>
         </div>
     </div>
@@ -101,11 +103,11 @@
                     <table class="table table-hover mb-0" id="salesTable">
                         <thead class="table-light">
                             <tr>
-                                <th>Category</th>
-                                <th>Stock Code</th>
-                                <th>Description</th>
-                                <th>Quantity</th>
-                                <th>Date</th>
+                                <th class="sortable" onclick="sortTable('category')">Category <span class="sort-caret"></span></th>
+                                <th class="sortable" onclick="sortTable('stock_code')">Stock Code <span class="sort-caret"></span></th>
+                                <th class="sortable" onclick="sortTable('stock_description')">Description <span class="sort-caret"></span></th>
+                                <th class="sortable" onclick="sortTable('quantity')">Quantity <span class="sort-caret"></span></th>
+                                <th class="sortable" onclick="sortTable('sale_date')">Date <span class="sort-caret"></span></th>
                             </tr>
                         </thead>
                         <tbody id="salesTableBody">
@@ -125,6 +127,9 @@
 {% block extra_js %}
 <script>
     let monthlyChart = null;
+    let currentTableData = [];
+    let currentSortColumn = null;
+    let currentSortDirection = 'asc';
 
     function loadMonthlyData() {
         const year = parseInt(document.getElementById('yearSelect').value);
@@ -139,6 +144,10 @@
         fetch(`/api/sales/month?${params}`)
             .then(response => response.json())
             .then(data => {
+                currentTableData = data;
+                currentSortColumn = null;
+                currentSortDirection = 'asc';
+                clearSortIndicators();
                 updateTable(data);
                 updateChart(data);
                 updateSummary(data);
@@ -147,6 +156,60 @@
                 console.error('Error:', error);
                 alert('Error loading data');
             });
+    }
+
+    function sortTable(column) {
+        // Toggle sort direction if clicking same column
+        if (currentSortColumn === column) {
+            currentSortDirection = currentSortDirection === 'asc' ? 'desc' : 'asc';
+        } else {
+            currentSortColumn = column;
+            currentSortDirection = 'asc';
+        }
+
+        // Sort the data
+        const sortedData = [...currentTableData].sort((a, b) => {
+            let aValue = a[column];
+            let bValue = b[column];
+
+            // Handle numeric values
+            if (typeof aValue === 'number' && typeof bValue === 'number') {
+                return currentSortDirection === 'asc' ? aValue - bValue : bValue - aValue;
+            }
+
+            // Handle string values
+            aValue = String(aValue).toLowerCase();
+            bValue = String(bValue).toLowerCase();
+            
+            if (currentSortDirection === 'asc') {
+                return aValue.localeCompare(bValue);
+            } else {
+                return bValue.localeCompare(aValue);
+            }
+        });
+
+        // Update sort indicators
+        clearSortIndicators();
+        updateSortIndicator(column, currentSortDirection);
+
+        // Update table with sorted data
+        updateTable(sortedData);
+    }
+
+    function updateSortIndicator(column, direction) {
+        const headers = document.querySelectorAll('.table th.sortable');
+        headers.forEach(header => {
+            if (header.getAttribute('onclick').includes(`'${column}'`)) {
+                const caret = header.querySelector('.sort-caret');
+                caret.classList.add(direction);
+            }
+        });
+    }
+
+    function clearSortIndicators() {
+        document.querySelectorAll('.sort-caret').forEach(caret => {
+            caret.classList.remove('asc', 'desc');
+        });
     }
 
     function updateTable(data) {
@@ -180,14 +243,27 @@
             groupedData[row.stock_code].quantity += row.quantity;
         });
 
-        const labels = Object.keys(groupedData);
-        const quantities = labels.map(code => groupedData[code].quantity);
+        const labels = Object.keys(groupedData).map(code => groupedData[code].description);
+        const quantities = Object.keys(groupedData).map(code => groupedData[code].quantity);
 
-        const ctx = document.getElementById('monthlyChart').getContext('2d');
+        const canvas = document.getElementById('monthlyChart');
+        const ctx = canvas.getContext('2d');
         
         if (monthlyChart) {
             monthlyChart.destroy();
         }
+
+        // Calculate canvas dimensions based on number of products
+        const canvasWidth = Math.max(800, labels.length * 60);
+        const canvasHeight = 400;
+        
+        // Set canvas internal resolution
+        canvas.width = canvasWidth;
+        canvas.height = canvasHeight;
+        
+        // Set display size
+        canvas.style.width = canvasWidth + 'px';
+        canvas.style.height = canvasHeight + 'px';
 
         monthlyChart = new Chart(ctx, {
             type: 'bar',
@@ -202,7 +278,8 @@
                 }]
             },
             options: {
-                responsive: true,
+                responsive: false,
+                maintainAspectRatio: false,
                 plugins: {
                     legend: {
                         display: true,
@@ -210,6 +287,15 @@
                     }
                 },
                 scales: {
+                    x: {
+                        ticks: {
+                            maxRotation: 45,
+                            minRotation: 45,
+                            font: {
+                                size: 11
+                            }
+                        }
+                    },
                     y: {
                         beginAtZero: true,
                         title: {

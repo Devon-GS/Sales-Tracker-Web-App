@@ -11,3 +11,4 @@ node_modules/
 
 # Other
 /sales_tracker.db
+/__pycache__

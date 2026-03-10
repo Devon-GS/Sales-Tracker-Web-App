@@ -27,7 +27,7 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         category_id INTEGER NOT NULL,
         stock_description TEXT NOT NULL,
-        stock_code TEXT NOT NULL,
+        stock_code INTEGER NOT NULL,
         quantity INTEGER NOT NULL,
         sale_date DATE NOT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

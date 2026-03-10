@@ -1,6 +1,7 @@
 from database import get_db_connection
 from datetime import datetime
 import calendar
+import sqlite3
 
 class DatabaseModels:
     
@@ -45,6 +46,8 @@ class DatabaseModels:
         conn = get_db_connection()
         c = conn.cursor()
         try:
+            # Ensure stock_code is an integer
+            stock_code = int(stock_code)
             c.execute('''INSERT INTO sales (category_id, stock_description, stock_code, quantity, sale_date)
                         VALUES (?, ?, ?, ?, ?)''',
                      (category_id, stock_description, stock_code, quantity, sale_date))

@@ -227,3 +227,45 @@ h1, h2, h3, h4, h5, h6 {
         transform: rotate(360deg);
     }
 }
+
+/* Chart Container with Horizontal Scroll */
+.chart-container {
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding-bottom: 10px;
+    position: relative;
+}
+
+.chart-container canvas {
+    display: block;
+}
+
+/* Sortable Table Headers */
+.table th.sortable {
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+}
+
+.table th.sortable:hover {
+    background-color: rgba(0, 0, 0, 0.075);
+}
+
+.sort-caret {
+    display: inline-block;
+    margin-left: 5px;
+    font-size: 0.8em;
+    opacity: 0.5;
+}
+
+.sort-caret.asc::after {
+    content: ' ↑';
+    opacity: 1;
+    color: #007bff;
+}
+
+.sort-caret.desc::after {
+    content: ' ↓';
+    opacity: 1;
+    color: #007bff;
+}
