@@ -1,33 +1,27 @@
 from flask import Flask, render_template, request, jsonify
 from database import init_db
 from models import DatabaseModels
-import pandas as pd
 from datetime import datetime
+import pandas as pd
 import os
 import io
-import sys
 import threading
 import queue
-import time
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = 'uploads'
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 
-# Create upload folder if it doesn't exist
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
-# Global queue for streaming logs
 log_queue = queue.Queue()
 upload_complete = False
 
-# Initialize database
 init_db()
 
 def add_log(message):
     """Add a log message to the queue for real-time streaming."""
     log_queue.put(message)
-    print(message)
 
 @app.route('/api/logs')
 def stream_logs():
@@ -35,7 +29,7 @@ def stream_logs():
     def generate():
         last_sent = False
         timeout = 0
-        while timeout < 60:  # 60 second timeout
+        while timeout < 60:
             try:
                 msg = log_queue.get(timeout=1)
                 yield f"data: {msg}\n\n"
@@ -161,11 +155,8 @@ def upload_csv():
     if not file.filename.endswith('.csv'):
         return jsonify({'error': 'File must be CSV format'}), 400
     
-    # Read file content into memory before passing to thread
-    # This prevents "I/O operation on closed file" error
     file_content = file.read()
     
-    # Clear queue and reset flag
     while not log_queue.empty():
         try:
             log_queue.get_nowait()
@@ -173,7 +164,6 @@ def upload_csv():
             break
     upload_complete = False
     
-    # Start processing in a separate thread with file content
     thread = threading.Thread(target=process_csv_file, args=(file_content,))
     thread.daemon = True
     thread.start()
@@ -187,22 +177,14 @@ def process_csv_file(file_content):
     try:
         add_log("Starting CSV upload...")
         
-        # Create BytesIO object from file content
         file_obj = io.BytesIO(file_content)
-        
-        # Read CSV - skip first 2 rows (metadata/header rows)
         df = pd.read_csv(file_obj, skiprows=2, header=None)
         
-        add_log(f"CSV loaded with {len(df)} rows")
-        add_log(f"Column count: {len(df.columns)}")
-        
-        # Column 1: Category, Column 2: Description, Column 3: Code, Column 4: Date, Column 7: Quantity
         if len(df.columns) < 7:
             add_log("Error: CSV must have at least 7 columns")
             upload_complete = True
             return
         
-        # Get all categories
         categories = {cat['name']: cat['id'] for cat in DatabaseModels.get_all_categories()}
         
         summary = {
@@ -212,62 +194,47 @@ def process_csv_file(file_content):
             'error_details': []
         }
         
-        # First pass: extract and aggregate data by category, code, and date
-        aggregated_data = {}  # key: (category_name, code, date_str) -> {quantity, description}
+        aggregated_data = {}
         add_log("Parsing and aggregating data...")
         
         for idx, (_, row) in enumerate(df.iterrows()):
             row_number = idx + 4
             
-            # Skip if entire row is NaN
             if row.isna().all():
                 continue
             
             try:
-                # Extract columns
                 category_name = str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else ""
                 description = str(row.iloc[1]).strip() if pd.notna(row.iloc[1]) else ""
                 
-                # Parse stock code as integer
                 try:
                     code = int(float(row.iloc[2]))
                 except (ValueError, TypeError):
                     summary['errors'] += 1
                     summary['error_details'].append(f"Row {row_number}: Invalid stock code '{row.iloc[2]}'")
-                    add_log(f"Row {row_number}: Invalid stock code")
                     continue
                 
                 date_str = str(row.iloc[3]).strip() if pd.notna(row.iloc[3]) else ""
                 
-                # Parse quantity
                 try:
                     quantity = int(float(row.iloc[6]))
                 except (ValueError, TypeError):
                     summary['errors'] += 1
                     summary['error_details'].append(f"Row {row_number}: Invalid quantity value '{row.iloc[6]}'")
-                    add_log(f"Row {row_number}: Invalid quantity")
                     continue
                 
-                # Validate required fields
                 if not category_name or code is None:
                     summary['errors'] += 1
                     summary['error_details'].append(f"Row {row_number}: Missing category or code")
-                    add_log(f"Row {row_number}: Missing category or code")
                     continue
                 
-                # Parse date - use DD/MM/YYYY format
                 try:
                     sale_date = pd.to_datetime(date_str, format='%d/%m/%Y').date()
-                    # Debug log first 10 rows to see dates
-                    if idx < 10:
-                        add_log(f"Row {row_number}: date_str='{date_str}' -> parsed_date={sale_date}")
                 except:
                     summary['errors'] += 1
                     summary['error_details'].append(f"Row {row_number}: Invalid date format '{date_str}'")
-                    add_log(f"Row {row_number}: Invalid date format '{date_str}'")
                     continue
                 
-                # Aggregate by (category, code, date) - store both quantity and description
                 key = (category_name, code, str(sale_date))
                 if key in aggregated_data:
                     aggregated_data[key]['quantity'] += quantity
@@ -277,54 +244,43 @@ def process_csv_file(file_content):
             except Exception as e:
                 summary['errors'] += 1
                 summary['error_details'].append(f"Row {row_number}: {str(e)}")
-                add_log(f"Row {row_number}: Error - {str(e)}")
         
         add_log(f"Aggregated {len(aggregated_data)} unique daily sales records")
         add_log("Inserting data into database...")
         
-        # Second pass: insert aggregated data, checking for duplicates
         for idx, ((category_name, code, date_str), data) in enumerate(aggregated_data.items()):
             try:
                 sale_date = pd.to_datetime(date_str, format='%Y-%m-%d').date()
                 total_quantity = data['quantity']
                 description = data['description']
                 
-                # Auto-create category if needed
                 if category_name not in categories:
-                    add_log(f"Creating new category: '{category_name}'")
                     result = DatabaseModels.add_category(category_name)
                     if result['success']:
                         categories[category_name] = result['id']
                     else:
                         summary['errors'] += 1
                         summary['error_details'].append(f"Failed to create category '{category_name}'")
-                        add_log(f"Failed to create category '{category_name}'")
                         continue
                 
                 category_id = categories[category_name]
                 
-                # Add record to database with description
                 result = DatabaseModels.add_sales_record(category_id, description, code, total_quantity, sale_date)
                 
                 if result['success']:
                     summary['added'] += 1
-                    add_log(f"✓ Added: {category_name} - {code} ({date_str}): {total_quantity} units")
                 elif result['action'] == 'duplicate':
                     summary['duplicates'] += 1
-                    add_log(f"⊘ Duplicate skipped: {category_name} - {code} ({date_str})")
                 else:
                     summary['errors'] += 1
                     summary['error_details'].append(f"Failed to add: {category_name} - {code} ({date_str}): {result.get('error', 'Unknown error')}")
-                    add_log(f"✗ Failed: {category_name} - {code}")
                 
-                # Send progress update every 10 records
                 if (idx + 1) % 10 == 0:
                     add_log(f"Progress: Processed {idx + 1}/{len(aggregated_data)} records")
             
             except Exception as e:
                 summary['errors'] += 1
                 summary['error_details'].append(f"Error processing {category_name} - {code}: {str(e)}")
-                add_log(f"✗ Error: {category_name} - {code}: {str(e)}")
         
         add_log(f"Processing complete: {summary['added']} added, {summary['duplicates']} duplicates, {summary['errors']} errors")
         

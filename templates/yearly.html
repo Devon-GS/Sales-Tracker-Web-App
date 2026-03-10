@@ -102,7 +102,6 @@
                 }
             })
             .catch(error => {
-                console.error('Error:', error);
                 alert('Error loading items');
             });
     }
@@ -115,7 +114,6 @@
             return;
         }
 
-        // Sort items alphabetically by stock_description
         const sortedItems = [...items].sort((a, b) => 
             a.stock_description.localeCompare(b.stock_description)
         );
@@ -148,7 +146,6 @@
                 updateYearlyChart(data.data, stockCode, description);
             })
             .catch(error => {
-                console.error('Error:', error);
                 alert('Error loading chart');
             });
     }

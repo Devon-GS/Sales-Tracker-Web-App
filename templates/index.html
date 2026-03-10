@@ -156,13 +156,11 @@
                 updateSummary(data);
             })
             .catch(error => {
-                console.error('Error:', error);
                 alert('Error loading data');
             });
     }
 
     function sortTable(column) {
-        // Toggle sort direction if clicking same column
         if (currentSortColumn === column) {
             currentSortDirection = currentSortDirection === 'asc' ? 'desc' : 'asc';
         } else {
@@ -170,17 +168,14 @@
             currentSortDirection = 'asc';
         }
 
-        // Sort the data
         const sortedData = [...currentTableData].sort((a, b) => {
             let aValue = a[column];
             let bValue = b[column];
 
-            // Handle numeric values
             if (typeof aValue === 'number' && typeof bValue === 'number') {
                 return currentSortDirection === 'asc' ? aValue - bValue : bValue - aValue;
             }
 
-            // Handle string values
             aValue = String(aValue).toLowerCase();
             bValue = String(bValue).toLowerCase();
             
@@ -191,11 +186,8 @@
             }
         });
 
-        // Update sort indicators
         clearSortIndicators();
         updateSortIndicator(column, currentSortDirection);
-
-        // Update table with sorted data
         updateTable(sortedData);
     }
 

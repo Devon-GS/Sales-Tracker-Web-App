@@ -222,7 +222,6 @@
         };
 
         eventSource.onerror = function(error) {
-            console.error('Log stream error:', error);
             eventSource.close();
         };
     }
@@ -234,7 +233,6 @@
         line.textContent = message;
         terminalContent.appendChild(line);
         
-        // Auto-scroll to bottom
         terminalContent.parentElement.scrollTop = terminalContent.parentElement.scrollHeight;
     }
 
@@ -263,7 +261,7 @@
                     `).join('');
                 }
             })
-            .catch(error => console.error('Error:', error));
+            .catch(error => {});
     }
 </script>
 {% endblock %}
