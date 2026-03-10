@@ -115,7 +115,12 @@
             return;
         }
 
-        itemsList.innerHTML = items.map((item, idx) => `
+        // Sort items alphabetically by stock_description
+        const sortedItems = [...items].sort((a, b) => 
+            a.stock_description.localeCompare(b.stock_description)
+        );
+
+        itemsList.innerHTML = sortedItems.map((item, idx) => `
             <button type="button" class="list-group-item list-group-item-action ${idx === 0 ? 'active' : ''}" 
                     onclick="selectItem('${item.stock_code}', '${item.stock_description}')">
                 <div class="small text-muted">${item.stock_code}</div>

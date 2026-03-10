@@ -1,14 +1,21 @@
-[project]
+[tool.poetry]
 name = "sales-tracker"
 version = "0.1.0"
 description = "CSV-based sales tracking app with Flask"
-requires-python = ">=3.9"
-dependencies = [
-    "flask==3.0.0",
-    "pandas==2.1.1",
-    "python-dateutil==2.8.2",
-]
+authors = ["Your Name <you@example.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.9"
+flask = "^3.0.0"
+pandas = "^2.0.3"
+python-dateutil = "^2.8.2"
+
+[tool.poetry.group.dev.dependencies]
+
+[tool.poetry]
+package-mode = false
 
 [build-system]
-requires = ["setuptools", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
